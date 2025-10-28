@@ -108,6 +108,60 @@ See `gptel-backend` for documentation."
   :group 'gptel-magit)
 
 
+(defun gptel-magit--fill-body-safely (body)
+  "Fill BODY at `gptel-magit-body-fill-column`, but skip:
+- fenced code blocks (``` ... ``` or ~~~ ... ~~~)
+- list blocks (-, *, +, or numbered lists)
+- ATX headings (# ...)
+
+Fills only plain text paragraphs."
+  (with-temp-buffer
+    (insert body)
+    (goto-char (point-min))
+    (let ((fill-column gptel-magit-body-fill-column)
+          (in-fence nil)
+          (fence-rx (rx line-start (* space) (or "```" "~~~")))
+          (list-rx  (rx line-start (* space)
+                        (or (: (+ digit) ".") "-" "+" "*") (+ space)))
+          (head-rx  (rx line-start (* space) "#" (+ space))))
+      ;; Don't let adaptive prefixes cause odd wrapping.
+      (setq-local adaptive-fill-mode nil)
+      (while (not (eobp))
+        (cond
+         ;; Toggle code-fence regions: never fill inside.
+         ((looking-at fence-rx)
+          (setq in-fence (not in-fence))
+          (forward-line 1))
+
+         (in-fence
+          (forward-line 1))
+
+         ;; Skip list blocks: consume contiguous list lines unchanged.
+         ((looking-at list-rx)
+          (while (and (not (eobp))
+                      (or (looking-at list-rx) (looking-at (rx line-start (* space) line-end))))
+            (forward-line 1)))
+
+         ;; Skip headings.
+         ((looking-at head-rx)
+          (forward-line 1))
+
+         ;; Blank line: just move on.
+         ((looking-at (rx line-start (* space) line-end))
+          (forward-line 1))
+
+         ;; Plain paragraph: fill this paragraph only.
+         (t
+          (let ((start (point)))
+            (while (and (not (eobp))
+                        (not (looking-at (rx line-start (* space) line-end)))
+                        (not (looking-at fence-rx))
+                        (not (looking-at list-rx))
+                        (not (looking-at head-rx)))
+              (forward-line 1))
+            (fill-region start (point))))))
+      (string-trim-right (buffer-string)))))
+
 (defun gptel-magit--format-commit-message (message)
   "Keep subject as-is; optionally wrap the body.
 MESSAGE is the full commit message to format."
@@ -115,16 +169,13 @@ MESSAGE is the full commit message to format."
          (nl (string-match "\n" msg))
          (subject (if nl (substring msg 0 nl) msg))
          (body (and nl (string-trim (substring msg (1+ nl))))))
-    (if (or (null body) (string-empty-p body) (not gptel-magit-fill-body))
-        ;; No body or wrapping disabled: return as-is.
-        (if body (format "%s\n\n%s" subject body) subject)
-      ;; Wrap body only.
-      (with-temp-buffer
-        (insert body)
-        (let ((fill-column gptel-magit-body-fill-column))
-          (goto-char (point-min))
-          (fill-region (point-min) (point-max)))
-        (format "%s\n\n%s" subject (string-trim-right (buffer-string)))))))
+    (cond
+     ;; No body or wrapping disabled: return as-is.
+     ((or (null body) (string-empty-p body) (not gptel-magit-fill-body))
+      (if body (format "%s\n\n%s" subject body) subject))
+     ;; Safe-fill: wrap only non-list, non-code, non-heading paragraphs.
+     (t
+      (format "%s\n\n%s" subject (gptel-magit--fill-body-safely body))))))
 
 (defun gptel-magit--request (&rest args)
   "Call `gptel-request` with ARGS.
