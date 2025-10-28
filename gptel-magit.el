@@ -97,15 +97,34 @@ See `gptel-backend` for documentation."
  :type (get 'gptel-backend 'custom-type)
  :group 'gptel-magit)
 
+(defcustom gptel-magit-fill-body t
+  "If non-nil, wrap the commit body to `gptel-magit-body-fill-column`."
+  :type 'boolean
+  :group 'gptel-magit)
+
+(defcustom gptel-magit-body-fill-column 72
+  "Fill column used when `gptel-magit-fill-body` is non-nil."
+  :type 'integer
+  :group 'gptel-magit)
+
 
 (defun gptel-magit--format-commit-message (message)
-  "Format commit message MESSAGE nicely."
-  (with-temp-buffer
-    (insert message)
-    (text-mode)
-    (setq fill-column git-commit-summary-max-length)
-    (fill-region (point-min) (point-max))
-    (buffer-string)))
+  "Keep subject as-is; optionally wrap the body.
+MESSAGE is the full commit message to format."
+  (let* ((msg (string-trim-right message))
+         (nl (string-match "\n" msg))
+         (subject (if nl (substring msg 0 nl) msg))
+         (body (and nl (string-trim (substring msg (1+ nl))))))
+    (if (or (null body) (string-empty-p body) (not gptel-magit-fill-body))
+        ;; No body or wrapping disabled: return as-is.
+        (if body (format "%s\n\n%s" subject body) subject)
+      ;; Wrap body only.
+      (with-temp-buffer
+        (insert body)
+        (let ((fill-column gptel-magit-body-fill-column))
+          (goto-char (point-min))
+          (fill-region (point-min) (point-max)))
+        (format "%s\n\n%s" subject (string-trim-right (buffer-string)))))))
 
 (defun gptel-magit--request (&rest args)
   "Call `gptel-request` with ARGS.
