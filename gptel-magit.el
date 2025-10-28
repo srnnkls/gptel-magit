@@ -107,6 +107,13 @@ See `gptel-backend` for documentation."
   :type 'integer
   :group 'gptel-magit)
 
+(defcustom gptel-magit-subject-max-length 50
+  "Maximum length for commit message subject line.
+If the generated subject exceeds this length, it will be truncated
+and an ellipsis will be added."
+  :type 'integer
+  :group 'gptel-magit)
+
 
 (defun gptel-magit--fill-body-safely (body)
   "Fill BODY at `gptel-magit-body-fill-column`, but skip:
@@ -168,14 +175,32 @@ MESSAGE is the full commit message to format."
   (let* ((msg (string-trim-right message))
          (nl (string-match "\n" msg))
          (subject (if nl (substring msg 0 nl) msg))
-         (body (and nl (string-trim (substring msg (1+ nl))))))
+         (body (and nl (string-trim (substring msg (1+ nl)))))
+         (overflow nil))
+    ;; Move overflow content from subject if it exceeds max length
+    (when (> (length subject) gptel-magit-subject-max-length)
+      (let* ((truncate-pos gptel-magit-subject-max-length)
+             ;; Find last word boundary before max length
+             (last-space (or (string-match-p " [^ ]*\\'"
+                                             (substring subject 0 truncate-pos))
+                             truncate-pos))
+             (split-pos (if (and last-space (> last-space 0))
+                            last-space
+                          truncate-pos)))
+        (setq overflow (string-trim (substring subject split-pos)))
+        (setq subject (string-trim-right (substring subject 0 split-pos)))))
+    ;; Format the original body if needed
+    (when (and body (not (string-empty-p body)) gptel-magit-fill-body)
+      (setq body (gptel-magit--fill-body-safely body)))
+    ;; Construct final message: subject + overflow (unwrapped) + body (wrapped)
     (cond
-     ;; No body or wrapping disabled: return as-is.
-     ((or (null body) (string-empty-p body) (not gptel-magit-fill-body))
-      (if body (format "%s\n\n%s" subject body) subject))
-     ;; Safe-fill: wrap only non-list, non-code, non-heading paragraphs.
-     (t
-      (format "%s\n\n%s" subject (gptel-magit--fill-body-safely body))))))
+     ((and overflow body (not (string-empty-p body)))
+      (format "%s\n\n%s\n\n%s" subject overflow body))
+     (overflow
+      (format "%s\n\n%s" subject overflow))
+     ((and body (not (string-empty-p body)))
+      (format "%s\n\n%s" subject body))
+     (t subject))))
 
 (defun gptel-magit--request (&rest args)
   "Call `gptel-request` with ARGS.
